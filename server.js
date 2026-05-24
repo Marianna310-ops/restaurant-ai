@@ -10,7 +10,7 @@ app.use(express.json());
 
 const VoiceResponse = twilio.twiml.VoiceResponse;
 
-// ─── Lazy init clients (prevents crash if env vars load late) ─────────────────
+// ─── Lazy init clients ────────────────────────────────────────────────────────
 let _twilioClient = null;
 const getTwilioClient = () => {
   if (!_twilioClient) {
@@ -44,21 +44,39 @@ const RESTAURANT = {
   phone:     process.env.STAFF_PHONE           || null,
 };
 
-// ─── Claude system prompt ─────────────────────────────────────────────────────
-const SYSTEM_PROMPT = `You are Sofia, a warm host at ${RESTAURANT.name}, an Italian restaurant.
-Hours: ${RESTAURANT.hours}. Today is ${new Date().toISOString().split("T")[0]}.
+// ─── Claude system prompt (speech-optimized) ──────────────────────────────────
+const SYSTEM_PROMPT = `You are Sofia, a warm and charming host at ${RESTAURANT.name}, an authentic Italian restaurant in Seattle.
+Our hours are ${RESTAURANT.hours}. Today is ${new Date().toISOString().split("T")[0]}.
 
-Help callers make reservations or answer questions. Always reply ONLY with this JSON:
+Your personality:
+- Warm, genuine, and slightly Italian in flavor — use occasional words like "Perfetto!", "Benissimo!", "Certo!"
+- Speak naturally like a real person on the phone — use contractions, short sentences, natural rhythm
+- Never sound scripted or robotic
+- If someone asks something unexpected, handle it gracefully like a real host would
+
+Your job: help callers make reservations or answer questions.
+
+IMPORTANT — Your "say" field will be read aloud by a voice AI, so:
+- Write short, natural sentences. No bullet points or lists.
+- Use commas and ellipses to create natural pauses: "Let me see... yes, we have availability!"
+- Avoid special characters like *, #, /, &
+- Use words instead of numbers where natural: "seven PM" not "7 PM"
+- Keep each response under 3 sentences — callers don't want to listen to long speeches
+
+Always reply ONLY with this JSON — no other text:
 {
   "intent": "reservation|hours|menu|other|transfer",
   "date": "YYYY-MM-DD or null",
   "time": "HH:MM or null",
   "party_size": number or null,
   "guest_name": "string or null",
-  "say": "what to say out loud — warm, short, conversational",
+  "say": "what Sofia says out loud",
   "booking_ready": true or false
 }
-For reservations collect: date, time, party_size, guest_name. Set booking_ready true only when all 4 are known.`;
+
+For a reservation collect all four: date, time, party_size, guest_name.
+Only set booking_ready to true when you have all four.
+Ask for one missing piece at a time — don't bombard the caller with multiple questions.`;
 
 // ─── In-memory sessions ───────────────────────────────────────────────────────
 const sessions = new Map();
@@ -67,7 +85,7 @@ const sessions = new Map();
 async function askClaude(history) {
   const res = await getClaude().messages.create({
     model:      "claude-sonnet-4-20250514",
-    max_tokens: 500,
+    max_tokens: 300,
     system:     SYSTEM_PROMPT,
     messages:   history,
   });
@@ -85,7 +103,7 @@ async function checkYelpAvailability({ date, time, party_size }) {
     );
     return { available: res.data.available === true };
   } catch {
-    return { available: true }; // graceful fallback
+    return { available: true };
   }
 }
 
@@ -103,31 +121,65 @@ async function createYelpReservation({ date, time, party_size, guest_name, guest
   }
 }
 
-// ─── Send SMS confirmation ────────────────────────────────────────────────────
+// ─── Send SMS ─────────────────────────────────────────────────────────────────
 async function sendSMS({ to, guest_name, date, time, party_size, confirmation_id }) {
   if (!to || !process.env.TWILIO_PHONE_NUMBER) return;
   await getTwilioClient().messages.create({
-    body: `Reservation confirmed at ${RESTAURANT.name}!\n${guest_name} | ${date} at ${time} | Party of ${party_size}\nConfirmation: ${confirmation_id}`,
+    body: `Reservation confirmed at ${RESTAURANT.name}!\n${guest_name} | ${date} at ${time} | Party of ${party_size}\nConfirmation #${confirmation_id}`,
     from: process.env.TWILIO_PHONE_NUMBER,
     to,
   });
 }
 
+// ─── Convert plain text to SSML for natural-sounding speech ──────────────────
+function toSSML(text) {
+  // Escape XML special characters
+  let s = text
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+
+  // Add natural pauses at punctuation
+  s = s
+    .replace(/\.\.\./g, '<break time="400ms"/>')   // ellipsis = longer pause
+    .replace(/,\s/g,    ',<break time="200ms"/> ')  // comma = short pause
+    .replace(/\?\s/g,   '?<break time="300ms"/> ')  // question = medium pause
+    .replace(/!\s/g,    '!<break time="250ms"/> '); // exclamation = medium pause
+
+  // Slow down very slightly for warmth
+  return `<speak><prosody rate="95%" pitch="+1st">${s}</prosody></speak>`;
+}
+
 // ─── Build TwiML ──────────────────────────────────────────────────────────────
+// Using Google Wavenet — much more natural than Amazon Polly
+const VOICE = "Google.en-US-Neural2-F";
+
 function speak(text, { end = false, transfer = false } = {}) {
   const twiml = new VoiceResponse();
+  const ssml  = toSSML(text);
+
   if (transfer && RESTAURANT.phone) {
-    twiml.say({ voice: "Polly.Joanna-Neural" }, text);
+    twiml.say({ voice: VOICE }, text); // no SSML for transfer, keep it quick
     twiml.dial(RESTAURANT.phone);
     return twiml.toString();
   }
+
   if (end) {
-    twiml.say({ voice: "Polly.Joanna-Neural" }, text);
+    twiml.say({ voice: VOICE, language: "en-US" }, text);
     twiml.hangup();
     return twiml.toString();
   }
-  const g = twiml.gather({ input: "speech", action: "/process-speech", speechTimeout: "auto", language: "en-US" });
-  g.say({ voice: "Polly.Joanna-Neural" }, text);
+
+  const g = twiml.gather({
+    input:         "speech",
+    action:        "/process-speech",
+    speechTimeout: "auto",
+    language:      "en-US",
+    enhanced:      "true",
+  });
+
+  // Use SSML for main conversation — sounds most natural
+  g.say({ voice: VOICE, language: "en-US" }, ssml);
   twiml.redirect("/no-input");
   return twiml.toString();
 }
@@ -136,23 +188,22 @@ function speak(text, { end = false, transfer = false } = {}) {
 // ROUTES
 // ══════════════════════════════════════════════════════════════════════════════
 
-// Health check — Railway uses this to confirm app is running
-app.get("/", (_req, res) => res.json({ status: "ok", restaurant: RESTAURANT.name }));
+app.get("/",       (_req, res) => res.json({ status: "ok", restaurant: RESTAURANT.name }));
 app.get("/health", (_req, res) => res.json({ status: "ok" }));
 
 // Incoming call
 app.post("/incoming-call", (req, res) => {
   const callSid = req.body.CallSid;
   sessions.set(callSid, { history: [], callerPhone: req.body.From });
-  const greeting = `Buonasera! Thank you for calling ${RESTAURANT.name}. I'm Sofia, your virtual host. How can I help you today?`;
+  const greeting = `Buonasera! Thank you for calling ${RESTAURANT.name}. I'm Sofia... how can I help you this evening?`;
   res.type("text/xml").send(speak(greeting));
 });
 
-// Process caller speech
+// Process speech
 app.post("/process-speech", async (req, res) => {
-  const callSid  = req.body.CallSid;
-  const speech   = req.body.SpeechResult;
-  const session  = sessions.get(callSid) || { history: [], callerPhone: req.body.From };
+  const callSid = req.body.CallSid;
+  const speech  = req.body.SpeechResult;
+  const session = sessions.get(callSid) || { history: [], callerPhone: req.body.From };
 
   session.history.push({ role: "user", content: speech });
 
@@ -167,8 +218,9 @@ app.post("/process-speech", async (req, res) => {
 
     if (ai.booking_ready && ai.date && ai.time && ai.party_size && ai.guest_name) {
       const { available } = await checkYelpAvailability(ai);
+
       if (!available) {
-        session.history.push({ role: "user", content: "That time is unavailable. Apologize and ask for another time." });
+        session.history.push({ role: "user", content: "That time is not available. Apologize warmly and ask for another time." });
         const retry = await askClaude(session.history);
         session.history.push({ role: "assistant", content: JSON.stringify(retry) });
         sessions.set(callSid, session);
@@ -176,38 +228,44 @@ app.post("/process-speech", async (req, res) => {
       }
 
       const booking = await createYelpReservation({ ...ai, guest_phone: session.callerPhone });
+
       if (booking.success) {
         await sendSMS({ to: session.callerPhone, ...ai, confirmation_id: booking.confirmation_id });
         sessions.delete(callSid);
         return res.type("text/xml").send(speak(
-          `${ai.say} Your confirmation number is ${booking.confirmation_id}. We sent a text to your phone. Arrivederci!`,
+          `${ai.say} Your confirmation number is ${booking.confirmation_id}. We've sent a text to your phone as well. We can't wait to see you — arrivederci!`,
           { end: true }
         ));
       }
-      return res.type("text/xml").send(speak("I'm sorry, I couldn't complete the booking. Let me transfer you.", { transfer: true }));
+
+      return res.type("text/xml").send(
+        speak("Oh, I'm so sorry — I had a little trouble completing that booking. Let me get one of our team members to help you right away.", { transfer: true })
+      );
     }
 
     res.type("text/xml").send(speak(ai.say));
 
   } catch (err) {
     console.error("Error:", err.message);
-    res.type("text/xml").send(speak("Mi dispiace, I'm having trouble. Let me transfer you to our staff.", { transfer: true }));
+    res.type("text/xml").send(
+      speak("Mi dispiace, I seem to be having a little trouble at the moment. Let me transfer you to our staff.", { transfer: true })
+    );
   }
 });
 
-// No input fallback
+// No input
 app.post("/no-input", (_req, res) => {
   const twiml = new VoiceResponse();
   const g = twiml.gather({ input: "speech", action: "/process-speech", speechTimeout: "auto" });
-  g.say({ voice: "Polly.Joanna-Neural" }, "Are you still there? How can I help you?");
+  g.say({ voice: VOICE }, "I'm still here! Take your time — how can I help?");
   twiml.hangup();
   res.type("text/xml").send(twiml.toString());
 });
 
-// SMS handler
+// SMS
 app.post("/incoming-sms", (_req, res) => {
   const twiml = new twilio.twiml.MessagingResponse();
-  twiml.message(`Thanks for contacting ${RESTAURANT.name}! For reservations please call us. Grazie!`);
+  twiml.message(`Grazie for reaching out to ${RESTAURANT.name}! For reservations please give us a call. See you soon!`);
   res.type("text/xml").send(twiml.toString());
 });
 
