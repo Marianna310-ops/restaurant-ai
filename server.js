@@ -35,7 +35,7 @@ console.log("TWILIO_PHONE_NUMBER :", process.env.TWILIO_PHONE_NUMBER  ? "SET" : 
 console.log("ANTHROPIC_API_KEY   :", process.env.ANTHROPIC_API_KEY    ? "SET" : "MISSING");
 console.log("ELEVENLABS_API_KEY  :", process.env.ELEVENLABS_API_KEY   ? "SET" : "MISSING");
 console.log("ELEVENLABS_VOICE_ID :", process.env.ELEVENLABS_VOICE_ID  ? "SET" : "MISSING");
-console.log("PORT                :", process.env.PORT || "3000 (default)");
+console.log("PORT                :", process.env.PORT || "8080 (default)");
 console.log("=================");
 
 // ─── Restaurant config ────────────────────────────────────────────────────────
@@ -163,7 +163,7 @@ async function speak(text, { end = false, transfer = false } = {}) {
   const audioId = await elevenLabsSpeak(text);
   const baseUrl = process.env.RAILWAY_PUBLIC_DOMAIN
     ? `https://${process.env.RAILWAY_PUBLIC_DOMAIN}`
-    : `http://localhost:${process.env.PORT || 3000}`;
+    : `http://localhost:${process.env.PORT || 8080}`;
 
   // Helper: play ElevenLabs audio OR fall back to Google Neural voice
   const playOrSay = (target) => {
@@ -312,7 +312,7 @@ app.post("/no-input", async (_req, res) => {
   const audioId = await elevenLabsSpeak("I'm still here! Take your time — how can I help?");
   const baseUrl = process.env.RAILWAY_PUBLIC_DOMAIN
     ? `https://${process.env.RAILWAY_PUBLIC_DOMAIN}`
-    : `http://localhost:${process.env.PORT || 3000}`;
+    : `http://localhost:${process.env.PORT || 8080}`;
   const g = twiml.gather({ input: "speech", action: "/process-speech", speechTimeout: "auto" });
   if (audioId) {
     g.play(`${baseUrl}/audio/${audioId}`);
@@ -331,7 +331,7 @@ app.post("/incoming-sms", (_req, res) => {
 });
 
 // ─── Start ────────────────────────────────────────────────────────────────────
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 8080;
 app.listen(PORT, "0.0.0.0", () => {
   console.log(`Server running on port ${PORT}`);
 });
