@@ -84,7 +84,7 @@ const sessions = new Map();
 // ─── Ask Claude ───────────────────────────────────────────────────────────────
 async function askClaude(history) {
   const res = await getClaude().messages.create({
-    model:      "claude-sonnet-4-20250514",
+    model:      "claude-sonnet-4-5",
     max_tokens: 300,
     system:     SYSTEM_PROMPT,
     messages:   history,
@@ -100,7 +100,7 @@ async function elevenLabsSpeak(text) {
   const apiKey  = process.env.ELEVENLABS_API_KEY;
 
   if (!voiceId || !apiKey) {
-    console.warn("ElevenLabs not configured — falling back to Google voice");
+    console.warn("ElevenLabs not configured — voiceId:", voiceId ? "SET" : "MISSING", "apiKey:", apiKey ? "SET" : "MISSING");
     return null;
   }
 
