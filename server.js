@@ -21,7 +21,14 @@ const getTwilioClient = () => {
   return _twilioClient;
 };
 
-const claude = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+let _claude = null;
+const getClaude = () => {
+  if (!_claude) {
+    if (!process.env.ANTHROPIC_API_KEY) throw new Error("ANTHROPIC_API_KEY is not set");
+    _claude = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+  }
+  return _claude;
+};
 
 // ─── Log env var status on startup ────────────────────────────────────────────
 console.log("=== ENV CHECK ===");
@@ -77,7 +84,7 @@ Rules:
 
 // ─── Helper: call Claude ──────────────────────────────────────────────────────
 async function askClaude(conversationHistory) {
-  const response = await claude.messages.create({
+  const response = await getClaude().messages.create({
     model: "claude-sonnet-4-20250514",
     max_tokens: 500,
     system: SYSTEM_PROMPT,
