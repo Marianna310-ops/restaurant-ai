@@ -9,11 +9,29 @@ app.use(express.urlencoded({ extended: false }));
 app.use(express.json());
 
 const VoiceResponse = twilio.twiml.VoiceResponse;
-const twilioClient = twilio(
-  process.env.TWILIO_ACCOUNT_SID,
-  process.env.TWILIO_AUTH_TOKEN
-);
+
+// ─── Lazy init so missing env vars don't crash on startup ─────────────────────
+let _twilioClient = null;
+const getTwilioClient = () => {
+  if (!_twilioClient) {
+    if (!process.env.TWILIO_ACCOUNT_SID) throw new Error("TWILIO_ACCOUNT_SID is not set in environment variables");
+    if (!process.env.TWILIO_AUTH_TOKEN)  throw new Error("TWILIO_AUTH_TOKEN is not set in environment variables");
+    _twilioClient = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
+  }
+  return _twilioClient;
+};
+
 const claude = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+
+// ─── Log env var status on startup ────────────────────────────────────────────
+console.log("=== ENV CHECK ===");
+console.log("TWILIO_ACCOUNT_SID:", process.env.TWILIO_ACCOUNT_SID ? "✅ SET" : "❌ MISSING");
+console.log("TWILIO_AUTH_TOKEN:", process.env.TWILIO_AUTH_TOKEN ? "✅ SET" : "❌ MISSING");
+console.log("TWILIO_PHONE_NUMBER:", process.env.TWILIO_PHONE_NUMBER ? "✅ SET" : "❌ MISSING");
+console.log("ANTHROPIC_API_KEY:", process.env.ANTHROPIC_API_KEY ? "✅ SET" : "❌ MISSING");
+console.log("RESTAURANT_NAME:", process.env.RESTAURANT_NAME ? "✅ SET" : "⚠️ using default");
+console.log("STAFF_PHONE:", process.env.STAFF_PHONE ? "✅ SET" : "⚠️ not set");
+console.log("=================");
 
 // ─── In-memory conversation state (keyed by Twilio CallSid) ───────────────────
 const sessions = new Map();
@@ -124,7 +142,7 @@ async function sendConfirmationSMS({ to, guest_name, date, time, party_size, con
     minute: "2-digit",
   });
 
-  await twilioClient.messages.create({
+  await getTwilioClient().messages.create({
     body:
       `✅ Reservation confirmed at ${RESTAURANT.name}!\n` +
       `👤 ${guest_name}\n` +
