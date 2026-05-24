@@ -33,8 +33,6 @@ console.log("TWILIO_ACCOUNT_SID  :", process.env.TWILIO_ACCOUNT_SID   ? "SET" : 
 console.log("TWILIO_AUTH_TOKEN   :", process.env.TWILIO_AUTH_TOKEN    ? "SET" : "MISSING");
 console.log("TWILIO_PHONE_NUMBER :", process.env.TWILIO_PHONE_NUMBER  ? "SET" : "MISSING");
 console.log("ANTHROPIC_API_KEY   :", process.env.ANTHROPIC_API_KEY    ? "SET" : "MISSING");
-console.log("ELEVENLABS_API_KEY  :", process.env.ELEVENLABS_API_KEY   ? "SET" : "MISSING");
-console.log("ELEVENLABS_VOICE_ID :", process.env.ELEVENLABS_VOICE_ID  ? "SET" : "MISSING");
 console.log("PORT                :", process.env.PORT || "8080 (default)");
 console.log("=================");
 
@@ -98,8 +96,6 @@ async function askClaude(history) {
 // ─── ElevenLabs TTS → returns public audio URL via Twilio ────────────────────
 // ElevenLabs generates the audio, we store it temporarily and serve via <Play>
 async function elevenLabsSpeak(text) {
-  const voiceId = process.env.ELEVENLABS_VOICE_ID;
-  const apiKey  = process.env.ELEVENLABS_API_KEY;
 
   if (!voiceId || !apiKey) {
     console.warn("ElevenLabs not configured — falling back to Google voice");
