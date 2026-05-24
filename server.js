@@ -131,27 +131,69 @@ async function sendSMS({ to, guest_name, date, time, party_size, confirmation_id
   });
 }
 
-// ─── Convert plain text to SSML for natural-sounding speech ──────────────────
+// ─── Italian phoneme dictionary — native pronunciation via IPA ───────────────
+const ITALIAN_PHONEMES = [
+  ["Buonasera",   "bwɔnaˈsɛra"    ],
+  ["buonasera",   "bwɔnaˈsɛra"    ],
+  ["Arrivederci", "arriˈvɛdertʃi" ],
+  ["arrivederci", "arriˈvɛdertʃi" ],
+  ["Grazie",      "ˈɡrattsje"     ],
+  ["grazie",      "ˈɡrattsje"     ],
+  ["Perfetto",    "perˈfetto"     ],
+  ["perfetto",    "perˈfetto"     ],
+  ["Benissimo",   "beˈnissimo"    ],
+  ["benissimo",   "beˈnissimo"    ],
+  ["Certo",       "ˈtʃɛrto"       ],
+  ["certo",       "ˈtʃɛrto"       ],
+  ["Prego",       "ˈprɛɡo"        ],
+  ["prego",       "ˈprɛɡo"        ],
+  ["Ciao",        "ˈtʃao"         ],
+  ["ciao",        "ˈtʃao"         ],
+  ["Allora",      "alˈlɔra"       ],
+  ["allora",      "alˈlɔra"       ],
+  ["Bruschetta",  "bruˈsketta"    ],
+  ["bruschetta",  "bruˈsketta"    ],
+  ["Gnocchi",     "ˈɲɔkki"        ],
+  ["gnocchi",     "ˈɲɔkki"        ],
+  ["Risotto",     "riˈzɔtto"      ],
+  ["risotto",     "riˈzɔtto"      ],
+  ["Tiramisu",    "tiramiˈsu"     ],
+  ["tiramisu",    "tiramiˈsu"     ],
+  ["Antipasto",   "antiˈpasto"    ],
+  ["antipasto",   "antiˈpasto"    ],
+  ["Carbonara",   "karboˈnaːra"   ],
+  ["Bolognese",   "boloɲˈɲeːze"   ],
+];
+
+// ─── Convert plain text to SSML ───────────────────────────────────────────────
 function toSSML(text) {
-  // Escape XML special characters
+  // Escape XML special characters first
   let s = text
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;");
 
-  // Add natural pauses at punctuation
-  s = s
-    .replace(/\.\.\./g, '<break time="400ms"/>')   // ellipsis = longer pause
-    .replace(/,\s/g,    ',<break time="200ms"/> ')  // comma = short pause
-    .replace(/\?\s/g,   '?<break time="300ms"/> ')  // question = medium pause
-    .replace(/!\s/g,    '!<break time="250ms"/> '); // exclamation = medium pause
+  // Replace Italian words with IPA phoneme tags for native-sounding pronunciation
+  for (const [word, ipa] of ITALIAN_PHONEMES) {
+    const escaped = word.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    s = s.replace(
+      new RegExp("\\b" + escaped + "\\b", "g"),
+      `<phoneme alphabet="ipa" ph="${ipa}">${word}</phoneme>`
+    );
+  }
 
-  // Slow down very slightly for warmth
-  return `<speak><prosody rate="95%" pitch="+1st">${s}</prosody></speak>`;
+  // Natural pauses at punctuation
+  s = s
+    .replace(/\.\.\./ g,  '<break time="450ms"/>')
+    .replace(/,\s/g,      ',<break time="200ms"/> ')
+    .replace(/\?\s*/g,   '?<break time="300ms"/> ')
+    .replace(/!\s*/g,     '!<break time="250ms"/> ');
+
+  return `<speak><prosody rate="93%" pitch="+1st">${s}</prosody></speak>`;
 }
 
 // ─── Build TwiML ──────────────────────────────────────────────────────────────
-// Using Google Wavenet — much more natural than Amazon Polly
+// Google Neural2-F: natural American accent + perfect Italian phonemes
 const VOICE = "Google.en-US-Neural2-F";
 
 function speak(text, { end = false, transfer = false } = {}) {
