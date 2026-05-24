@@ -96,6 +96,8 @@ async function askClaude(history) {
 // ─── ElevenLabs TTS → returns public audio URL via Twilio ────────────────────
 // ElevenLabs generates the audio, we store it temporarily and serve via <Play>
 async function elevenLabsSpeak(text) {
+  const voiceId = process.env.ELEVENLABS_VOICE_ID;
+  const apiKey  = process.env.ELEVENLABS_API_KEY;
 
   if (!voiceId || !apiKey) {
     console.warn("ElevenLabs not configured — falling back to Google voice");
