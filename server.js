@@ -29,11 +29,13 @@ const getClaude = () => {
 
 // ─── Startup log ──────────────────────────────────────────────────────────────
 console.log("=== ENV CHECK ===");
-console.log("TWILIO_ACCOUNT_SID :", process.env.TWILIO_ACCOUNT_SID  ? "SET" : "MISSING");
-console.log("TWILIO_AUTH_TOKEN  :", process.env.TWILIO_AUTH_TOKEN   ? "SET" : "MISSING");
-console.log("TWILIO_PHONE_NUMBER:", process.env.TWILIO_PHONE_NUMBER ? "SET" : "MISSING");
-console.log("ANTHROPIC_API_KEY  :", process.env.ANTHROPIC_API_KEY   ? "SET" : "MISSING");
-console.log("PORT               :", process.env.PORT || "3000 (default)");
+console.log("TWILIO_ACCOUNT_SID  :", process.env.TWILIO_ACCOUNT_SID   ? "SET" : "MISSING");
+console.log("TWILIO_AUTH_TOKEN   :", process.env.TWILIO_AUTH_TOKEN    ? "SET" : "MISSING");
+console.log("TWILIO_PHONE_NUMBER :", process.env.TWILIO_PHONE_NUMBER  ? "SET" : "MISSING");
+console.log("ANTHROPIC_API_KEY   :", process.env.ANTHROPIC_API_KEY    ? "SET" : "MISSING");
+console.log("ELEVENLABS_API_KEY  :", process.env.ELEVENLABS_API_KEY   ? "SET" : "MISSING");
+console.log("ELEVENLABS_VOICE_ID :", process.env.ELEVENLABS_VOICE_ID  ? "SET" : "MISSING");
+console.log("PORT                :", process.env.PORT || "3000 (default)");
 console.log("=================");
 
 // ─── Restaurant config ────────────────────────────────────────────────────────
@@ -44,7 +46,7 @@ const RESTAURANT = {
   phone:     process.env.STAFF_PHONE           || null,
 };
 
-// ─── Claude system prompt (speech-optimized) ──────────────────────────────────
+// ─── Claude system prompt ─────────────────────────────────────────────────────
 const SYSTEM_PROMPT = `You are Sofia, a warm and charming host at ${RESTAURANT.name}, an authentic Italian restaurant in Seattle.
 Our hours are ${RESTAURANT.hours}. Today is ${new Date().toISOString().split("T")[0]}.
 
@@ -56,7 +58,7 @@ Your personality:
 
 Your job: help callers make reservations or answer questions.
 
-IMPORTANT — Your "say" field will be read aloud by a voice AI, so:
+IMPORTANT — Your "say" field will be read aloud by ElevenLabs voice AI, so:
 - Write short, natural sentences. No bullet points or lists.
 - Use commas and ellipses to create natural pauses: "Let me see... yes, we have availability!"
 - Avoid special characters like *, #, /, &
@@ -91,6 +93,110 @@ async function askClaude(history) {
   });
   const clean = res.content[0].text.trim().replace(/```json|```/g, "").trim();
   return JSON.parse(clean);
+}
+
+// ─── ElevenLabs TTS → returns public audio URL via Twilio ────────────────────
+// ElevenLabs generates the audio, we store it temporarily and serve via <Play>
+async function elevenLabsSpeak(text) {
+  const voiceId = process.env.ELEVENLABS_VOICE_ID;
+  const apiKey  = process.env.ELEVENLABS_API_KEY;
+
+  if (!voiceId || !apiKey) {
+    console.warn("ElevenLabs not configured — falling back to Google voice");
+    return null;
+  }
+
+  try {
+    const response = await axios.post(
+      `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}/stream`,
+      {
+        text,
+        model_id: "eleven_turbo_v2", // lowest latency model — best for phone calls
+        voice_settings: {
+          stability:        0.45, // natural variation in tone
+          similarity_boost: 0.80, // stays true to chosen voice
+          style:            0.35, // warm, expressive delivery
+          use_speaker_boost: true,
+        },
+      },
+      {
+        headers: {
+          "xi-api-key":   apiKey,
+          "Content-Type": "application/json",
+          "Accept":       "audio/mpeg",
+        },
+        responseType: "arraybuffer",
+      }
+    );
+
+    // Store audio in memory and serve via a temporary route
+    const audioBuffer = Buffer.from(response.data);
+    const audioId     = Date.now() + "-" + Math.random().toString(36).slice(2, 7);
+    audioCache.set(audioId, { buffer: audioBuffer, created: Date.now() });
+
+    // Clean up old audio files (older than 5 minutes)
+    for (const [id, entry] of audioCache.entries()) {
+      if (Date.now() - entry.created > 300000) audioCache.delete(id);
+    }
+
+    return audioId;
+  } catch (err) {
+    console.error("ElevenLabs error:", err.response?.data || err.message);
+    return null;
+  }
+}
+
+// ─── In-memory audio cache ────────────────────────────────────────────────────
+const audioCache = new Map();
+
+// ─── Serve cached audio ───────────────────────────────────────────────────────
+app.get("/audio/:id", (req, res) => {
+  const entry = audioCache.get(req.params.id);
+  if (!entry) return res.status(404).send("Not found");
+  res.set("Content-Type", "audio/mpeg");
+  res.send(entry.buffer);
+});
+
+// ─── Build TwiML with ElevenLabs audio ───────────────────────────────────────
+async function speak(text, { end = false, transfer = false } = {}) {
+  const twiml   = new VoiceResponse();
+  const audioId = await elevenLabsSpeak(text);
+  const baseUrl = process.env.RAILWAY_PUBLIC_DOMAIN
+    ? `https://${process.env.RAILWAY_PUBLIC_DOMAIN}`
+    : `http://localhost:${process.env.PORT || 3000}`;
+
+  // Helper: play ElevenLabs audio OR fall back to Google Neural voice
+  const playOrSay = (target) => {
+    if (audioId) {
+      target.play(`${baseUrl}/audio/${audioId}`);
+    } else {
+      target.say({ voice: "Google.en-US-Neural2-F", language: "en-US" }, text);
+    }
+  };
+
+  if (transfer && RESTAURANT.phone) {
+    playOrSay(twiml);
+    twiml.dial(RESTAURANT.phone);
+    return twiml.toString();
+  }
+
+  if (end) {
+    playOrSay(twiml);
+    twiml.hangup();
+    return twiml.toString();
+  }
+
+  const g = twiml.gather({
+    input:         "speech",
+    action:        "/process-speech",
+    speechTimeout: "auto",
+    language:      "en-US",
+    enhanced:      "true",
+  });
+
+  playOrSay(g);
+  twiml.redirect("/no-input");
+  return twiml.toString();
 }
 
 // ─── Yelp: check availability ─────────────────────────────────────────────────
@@ -131,101 +237,6 @@ async function sendSMS({ to, guest_name, date, time, party_size, confirmation_id
   });
 }
 
-// ─── Italian phoneme dictionary — native pronunciation via IPA ───────────────
-const ITALIAN_PHONEMES = [
-  ["Buonasera",   "bwɔnaˈsɛra"    ],
-  ["buonasera",   "bwɔnaˈsɛra"    ],
-  ["Arrivederci", "arriˈvɛdertʃi" ],
-  ["arrivederci", "arriˈvɛdertʃi" ],
-  ["Grazie",      "ˈɡrattsje"     ],
-  ["grazie",      "ˈɡrattsje"     ],
-  ["Perfetto",    "perˈfetto"     ],
-  ["perfetto",    "perˈfetto"     ],
-  ["Benissimo",   "beˈnissimo"    ],
-  ["benissimo",   "beˈnissimo"    ],
-  ["Certo",       "ˈtʃɛrto"       ],
-  ["certo",       "ˈtʃɛrto"       ],
-  ["Prego",       "ˈprɛɡo"        ],
-  ["prego",       "ˈprɛɡo"        ],
-  ["Ciao",        "ˈtʃao"         ],
-  ["ciao",        "ˈtʃao"         ],
-  ["Allora",      "alˈlɔra"       ],
-  ["allora",      "alˈlɔra"       ],
-  ["Bruschetta",  "bruˈsketta"    ],
-  ["bruschetta",  "bruˈsketta"    ],
-  ["Gnocchi",     "ˈɲɔkki"        ],
-  ["gnocchi",     "ˈɲɔkki"        ],
-  ["Risotto",     "riˈzɔtto"      ],
-  ["risotto",     "riˈzɔtto"      ],
-  ["Tiramisu",    "tiramiˈsu"     ],
-  ["tiramisu",    "tiramiˈsu"     ],
-  ["Antipasto",   "antiˈpasto"    ],
-  ["antipasto",   "antiˈpasto"    ],
-  ["Carbonara",   "karboˈnaːra"   ],
-  ["Bolognese",   "boloɲˈɲeːze"   ],
-];
-
-// ─── Convert plain text to SSML ───────────────────────────────────────────────
-function toSSML(text) {
-  // Escape XML special characters first
-  let s = text
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;");
-
-  // Replace Italian words with IPA phoneme tags for native-sounding pronunciation
-  for (const [word, ipa] of ITALIAN_PHONEMES) {
-    const escaped = word.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    s = s.replace(
-      new RegExp("\\b" + escaped + "\\b", "g"),
-      `<phoneme alphabet="ipa" ph="${ipa}">${word}</phoneme>`
-    );
-  }
-
-  // Natural pauses at punctuation
-  s = s
-    .replace(/\.\.\./ g,  '<break time="450ms"/>')
-    .replace(/,\s/g,      ',<break time="200ms"/> ')
-    .replace(/\?\s*/g,   '?<break time="300ms"/> ')
-    .replace(/!\s*/g,     '!<break time="250ms"/> ');
-
-  return `<speak><prosody rate="93%" pitch="+1st">${s}</prosody></speak>`;
-}
-
-// ─── Build TwiML ──────────────────────────────────────────────────────────────
-// Google Neural2-F: natural American accent + perfect Italian phonemes
-const VOICE = "Google.en-US-Neural2-F";
-
-function speak(text, { end = false, transfer = false } = {}) {
-  const twiml = new VoiceResponse();
-  const ssml  = toSSML(text);
-
-  if (transfer && RESTAURANT.phone) {
-    twiml.say({ voice: VOICE }, text); // no SSML for transfer, keep it quick
-    twiml.dial(RESTAURANT.phone);
-    return twiml.toString();
-  }
-
-  if (end) {
-    twiml.say({ voice: VOICE, language: "en-US" }, text);
-    twiml.hangup();
-    return twiml.toString();
-  }
-
-  const g = twiml.gather({
-    input:         "speech",
-    action:        "/process-speech",
-    speechTimeout: "auto",
-    language:      "en-US",
-    enhanced:      "true",
-  });
-
-  // Use SSML for main conversation — sounds most natural
-  g.say({ voice: VOICE, language: "en-US" }, ssml);
-  twiml.redirect("/no-input");
-  return twiml.toString();
-}
-
 // ══════════════════════════════════════════════════════════════════════════════
 // ROUTES
 // ══════════════════════════════════════════════════════════════════════════════
@@ -234,11 +245,11 @@ app.get("/",       (_req, res) => res.json({ status: "ok", restaurant: RESTAURAN
 app.get("/health", (_req, res) => res.json({ status: "ok" }));
 
 // Incoming call
-app.post("/incoming-call", (req, res) => {
+app.post("/incoming-call", async (req, res) => {
   const callSid = req.body.CallSid;
   sessions.set(callSid, { history: [], callerPhone: req.body.From });
   const greeting = `Buonasera! Thank you for calling ${RESTAURANT.name}. I'm Sofia... how can I help you this evening?`;
-  res.type("text/xml").send(speak(greeting));
+  res.type("text/xml").send(await speak(greeting));
 });
 
 // Process speech
@@ -255,7 +266,7 @@ app.post("/process-speech", async (req, res) => {
     sessions.set(callSid, session);
 
     if (ai.intent === "transfer") {
-      return res.type("text/xml").send(speak(ai.say, { transfer: true }));
+      return res.type("text/xml").send(await speak(ai.say, { transfer: true }));
     }
 
     if (ai.booking_ready && ai.date && ai.time && ai.party_size && ai.guest_name) {
@@ -266,7 +277,7 @@ app.post("/process-speech", async (req, res) => {
         const retry = await askClaude(session.history);
         session.history.push({ role: "assistant", content: JSON.stringify(retry) });
         sessions.set(callSid, session);
-        return res.type("text/xml").send(speak(retry.say));
+        return res.type("text/xml").send(await speak(retry.say));
       }
 
       const booking = await createYelpReservation({ ...ai, guest_phone: session.callerPhone });
@@ -274,32 +285,40 @@ app.post("/process-speech", async (req, res) => {
       if (booking.success) {
         await sendSMS({ to: session.callerPhone, ...ai, confirmation_id: booking.confirmation_id });
         sessions.delete(callSid);
-        return res.type("text/xml").send(speak(
+        return res.type("text/xml").send(await speak(
           `${ai.say} Your confirmation number is ${booking.confirmation_id}. We've sent a text to your phone as well. We can't wait to see you — arrivederci!`,
           { end: true }
         ));
       }
 
       return res.type("text/xml").send(
-        speak("Oh, I'm so sorry — I had a little trouble completing that booking. Let me get one of our team members to help you right away.", { transfer: true })
+        await speak("Oh, I'm so sorry — I had a little trouble completing that booking. Let me get one of our team members to help you right away.", { transfer: true })
       );
     }
 
-    res.type("text/xml").send(speak(ai.say));
+    res.type("text/xml").send(await speak(ai.say));
 
   } catch (err) {
     console.error("Error:", err.message);
     res.type("text/xml").send(
-      speak("Mi dispiace, I seem to be having a little trouble at the moment. Let me transfer you to our staff.", { transfer: true })
+      await speak("Mi dispiace, I seem to be having a little trouble at the moment. Let me transfer you to our staff.", { transfer: true })
     );
   }
 });
 
 // No input
-app.post("/no-input", (_req, res) => {
+app.post("/no-input", async (_req, res) => {
   const twiml = new VoiceResponse();
+  const audioId = await elevenLabsSpeak("I'm still here! Take your time — how can I help?");
+  const baseUrl = process.env.RAILWAY_PUBLIC_DOMAIN
+    ? `https://${process.env.RAILWAY_PUBLIC_DOMAIN}`
+    : `http://localhost:${process.env.PORT || 3000}`;
   const g = twiml.gather({ input: "speech", action: "/process-speech", speechTimeout: "auto" });
-  g.say({ voice: VOICE }, "I'm still here! Take your time — how can I help?");
+  if (audioId) {
+    g.play(`${baseUrl}/audio/${audioId}`);
+  } else {
+    g.say({ voice: "Google.en-US-Neural2-F" }, "I'm still here! Take your time — how can I help?");
+  }
   twiml.hangup();
   res.type("text/xml").send(twiml.toString());
 });
