@@ -33,9 +33,9 @@ console.log("TWILIO_ACCOUNT_SID  :", process.env.TWILIO_ACCOUNT_SID       ? "SET
 console.log("TWILIO_AUTH_TOKEN   :", process.env.TWILIO_AUTH_TOKEN        ? "SET" : "MISSING");
 console.log("TWILIO_PHONE_NUMBER :", process.env.TWILIO_PHONE_NUMBER      ? "SET" : "MISSING");
 console.log("ANTHROPIC_API_KEY   :", process.env.ANTHROPIC_API_KEY        ? "SET" : "MISSING");
-console.log("ELEVENLABS_KEY      :", process.env.ELEVENLABS_KEY           ? "SET" : "MISSING");
-console.log("ELEVENLABS_VOICE    :", process.env.ELEVENLABS_VOICE         ? "SET" : "MISSING");
-console.log("RAILWAY_DOMAIN      :", process.env.RAILWAY_DOMAIN           ? "SET" : "MISSING");
+console.log("ELEVEN_LABS_API_KEY :", process.env.ELEVEN_LABS_API_KEY           ? "SET" : "MISSING");
+console.log("ELEVENLABS_VOICE_ID :", process.env.ELEVENLABS_VOICE_ID         ? "SET" : "MISSING");
+console.log("RAILWAY_PUBLIC_DOMAIN:", process.env.RAILWAY_PUBLIC_DOMAIN           ? "SET" : "MISSING");
 console.log("PORT                :", process.env.PORT || "8080 (default)");
 console.log("=================");
 
@@ -101,8 +101,8 @@ async function askClaude(history) {
 
 // ─── ElevenLabs TTS ───────────────────────────────────────────────────────────
 async function elevenLabsSpeak(text) {
-  const apiKey  = process.env.ELEVENLABS_KEY;
-  const voiceId = process.env.ELEVENLABS_VOICE;
+  const apiKey  = process.env.ELEVEN_LABS_API_KEY;
+  const voiceId = process.env.ELEVENLABS_VOICE_ID;
 
   if (!apiKey || !voiceId) {
     console.warn("ElevenLabs — KEY:", apiKey ? "SET" : "MISSING", "| VOICE:", voiceId ? "SET" : "MISSING");
@@ -163,7 +163,7 @@ app.get("/audio/:id", (req, res) => {
 async function speak(text, { end = false, transfer = false } = {}) {
   const twiml   = new VoiceResponse();
   const audioId = await elevenLabsSpeak(text);
-  const domain  = process.env.RAILWAY_DOMAIN || `localhost:${process.env.PORT || 8080}`;
+  const domain  = process.env.RAILWAY_PUBLIC_DOMAIN || `localhost:${process.env.PORT || 8080}`;
   const baseUrl = domain.startsWith("http") ? domain : `https://${domain}`;
 
   const playOrSay = (target) => {
@@ -252,9 +252,9 @@ app.get("/env-check", (_req, res) => {
     TWILIO_AUTH_TOKEN:   process.env.TWILIO_AUTH_TOKEN   ? "SET" : "MISSING",
     TWILIO_PHONE_NUMBER: process.env.TWILIO_PHONE_NUMBER ? "SET" : "MISSING",
     ANTHROPIC_API_KEY:   process.env.ANTHROPIC_API_KEY   ? "SET" : "MISSING",
-    ELEVENLABS_KEY:      process.env.ELEVENLABS_KEY       ? "SET" : "MISSING",
-    ELEVENLABS_VOICE:    process.env.ELEVENLABS_VOICE     ? "SET" : "MISSING",
-    RAILWAY_DOMAIN:      process.env.RAILWAY_DOMAIN       ? "SET" : "MISSING",
+    ELEVENLABS_KEY:      process.env.ELEVEN_LABS_API_KEY       ? "SET" : "MISSING",
+    ELEVENLABS_VOICE:    process.env.ELEVENLABS_VOICE_ID     ? "SET" : "MISSING",
+    RAILWAY_DOMAIN:      process.env.RAILWAY_PUBLIC_DOMAIN       ? "SET" : "MISSING",
     ALL_ENV_KEYS:        Object.keys(process.env).filter(k => !k.includes("npm")).sort(),
   });
 });
@@ -326,7 +326,7 @@ app.post("/no-input", async (_req, res) => {
   const twiml   = new VoiceResponse();
   const text    = "I'm still here! Take your time — how can I help?";
   const audioId = await elevenLabsSpeak(text);
-  const domain  = process.env.RAILWAY_DOMAIN || `localhost:${process.env.PORT || 8080}`;
+  const domain  = process.env.RAILWAY_PUBLIC_DOMAIN || `localhost:${process.env.PORT || 8080}`;
   const baseUrl = domain.startsWith("http") ? domain : `https://${domain}`;
   const g = twiml.gather({ input: "speech", action: "/process-speech", speechTimeout: "auto" });
   if (audioId) {
