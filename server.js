@@ -75,7 +75,7 @@ PERSONA:
 - Always smiling and helpful tone
 - Pronounce Italian dishes naturally and correctly
 
-GREETING: "thank you for calling Marianna Ristorante in Renton! This is Sofia — how can I help you today?"
+GREETING: "Grazie for calling Marianna Ristorante in Renton! This is Sofia — how can I help you today?"
 CLOSING: "We look forward to seeing you soon. A presto!"
 
 RESERVATIONS:
@@ -101,9 +101,30 @@ Always reply ONLY with this exact JSON — no other text:
 Today is ${new Date().toISOString().split("T")[0]}.
 booking_ready is always false — Yelp handles all bookings.`;
 
-// ─── In-memory sessions ───────────────────────────────────────────────────────
-const sessions  = new Map();
+// ─── In-memory sessions & audio cache ────────────────────────────────────────
+const sessions   = new Map();
 const audioCache = new Map();
+
+// ─── Pre-generate common responses at startup ─────────────────────────────────
+// These play instantly with zero ElevenLabs latency during calls
+const PRE_CACHED = {
+  greeting:   "Grazie for calling Marianna Ristorante in Renton! This is Sofia — how can I help you today?",
+  thinking:   "Mm, let me check on that for you.",
+  hold:       "One moment please.",
+};
+const preCache = new Map(); // phrase → audioId
+
+async function warmUpCache() {
+  console.log("Pre-generating common audio responses...");
+  for (const [key, text] of Object.entries(PRE_CACHED)) {
+    const audioId = await elevenLabsSpeak(text);
+    if (audioId) {
+      preCache.set(key, audioId);
+      console.log(`Cached: ${key}`);
+    }
+  }
+  console.log("Audio cache ready!");
+}
 
 // ─── Ask Claude ───────────────────────────────────────────────────────────────
 async function askClaude(history) {
@@ -288,7 +309,19 @@ app.get("/env-check", (_req, res) => {
 app.post("/incoming-call", async (req, res) => {
   const callSid = req.body.CallSid;
   sessions.set(callSid, { history: [], callerPhone: req.body.From });
-  const greeting = `Grazie for calling Marianna Ristorante in Renton! This is Sofia — how can I help you today?`;
+  const greetText = "Grazie for calling Marianna Ristorante in Renton! This is Sofia — how can I help you today?";
+  // Use pre-cached greeting audio if available for instant playback
+  const cachedGreetId = preCache.get("greeting");
+  if (cachedGreetId) {
+    const domain  = process.env.RAILWAY_PUBLIC_DOMAIN || `localhost:${process.env.PORT || 8080}`;
+    const baseUrl = domain.startsWith("http") ? domain : `https://${domain}`;
+    const twiml   = new VoiceResponse();
+    const g = twiml.gather({ input: "speech", action: "/process-speech", speechTimeout: "0.5", language: "en-US", enhanced: "true" });
+    g.play(`${baseUrl}/audio/${cachedGreetId}`);
+    twiml.redirect("/no-input");
+    return res.type("text/xml").send(twiml.toString());
+  }
+  const greeting = greetText;
   res.type("text/xml").send(await speak(greeting));
 });
 
@@ -299,6 +332,23 @@ app.post("/process-speech", async (req, res) => {
   const session = sessions.get(callSid) || { history: [], callerPhone: req.body.From };
 
   session.history.push({ role: "user", content: speech });
+
+  // Play "thinking" filler immediately while Claude + ElevenLabs process
+  // This eliminates the perceived silence during processing
+  const domain  = process.env.RAILWAY_PUBLIC_DOMAIN || `localhost:${process.env.PORT || 8080}`;
+  const baseUrl = domain.startsWith("http") ? domain : `https://${domain}`;
+  const thinkId = preCache.get("thinking");
+
+  if (thinkId) {
+    const twiml = new VoiceResponse();
+    twiml.play(`${baseUrl}/audio/${thinkId}`);
+    twiml.redirect("/process-speech-async?callSid=" + callSid);
+    res.type("text/xml").send(twiml.toString());
+    // Store speech for async processing
+    session.pendingSpeech = speech;
+    sessions.set(callSid, session);
+    return;
+  }
 
   try {
     const ai = await askClaude(session.history);
@@ -346,6 +396,40 @@ app.post("/process-speech", async (req, res) => {
   }
 });
 
+// Async speech processing (after thinking sound plays)
+app.post("/process-speech-async", async (req, res) => {
+  const callSid = req.query.callSid || req.body.CallSid;
+  const session = sessions.get(callSid);
+  if (!session) return res.type("text/xml").send("<Response><Hangup/></Response>");
+
+  const speech = session.pendingSpeech || "";
+  delete session.pendingSpeech;
+
+  try {
+    const ai = await askClaude(session.history);
+    session.history.push({ role: "assistant", content: JSON.stringify(ai) });
+    sessions.set(callSid, session);
+
+    if (ai.send_yelp_sms && session.callerPhone) {
+      try {
+        await getTwilioClient().messages.create({
+          body: `Hi! Book your table at Marianna Ristorante: ${RESTAURANT.yelpLink} — A presto!`,
+          from: process.env.TWILIO_PHONE_NUMBER,
+          to:   session.callerPhone,
+        });
+      } catch (err) { console.error("SMS error:", err.message); }
+    }
+
+    if (ai.intent === "transfer") {
+      return res.type("text/xml").send(await speak(ai.say, { transfer: true }));
+    }
+    res.type("text/xml").send(await speak(ai.say));
+  } catch (err) {
+    console.error("Async error:", err.message);
+    res.type("text/xml").send(await speak("Mi dispiace, let me transfer you to our staff.", { transfer: true }));
+  }
+});
+
 // No input fallback
 app.post("/no-input", async (_req, res) => {
   const twiml   = new VoiceResponse();
@@ -372,6 +456,8 @@ app.post("/incoming-sms", (_req, res) => {
 
 // ─── Start ────────────────────────────────────────────────────────────────────
 const PORT = process.env.PORT || 8080;
-app.listen(PORT, "0.0.0.0", () => {
+app.listen(PORT, "0.0.0.0", async () => {
   console.log(`Server running on port ${PORT}`);
+  // Pre-generate common audio after a short delay to let server fully start
+  setTimeout(warmUpCache, 3000);
 });
