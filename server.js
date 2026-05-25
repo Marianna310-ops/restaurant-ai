@@ -245,6 +245,20 @@ async function sendSMS({ to, guest_name, date, time, party_size, confirmation_id
 app.get("/",       (_req, res) => res.json({ status: "ok", restaurant: RESTAURANT.name }));
 app.get("/health", (_req, res) => res.json({ status: "ok" }));
 
+// ─── Diagnostic route — visit this in browser to see all env vars ─────────────
+app.get("/env-check", (_req, res) => {
+  res.json({
+    TWILIO_ACCOUNT_SID:  process.env.TWILIO_ACCOUNT_SID  ? "SET" : "MISSING",
+    TWILIO_AUTH_TOKEN:   process.env.TWILIO_AUTH_TOKEN   ? "SET" : "MISSING",
+    TWILIO_PHONE_NUMBER: process.env.TWILIO_PHONE_NUMBER ? "SET" : "MISSING",
+    ANTHROPIC_API_KEY:   process.env.ANTHROPIC_API_KEY   ? "SET" : "MISSING",
+    ELEVENLABS_KEY:      process.env.ELEVENLABS_KEY       ? "SET" : "MISSING",
+    ELEVENLABS_VOICE:    process.env.ELEVENLABS_VOICE     ? "SET" : "MISSING",
+    RAILWAY_DOMAIN:      process.env.RAILWAY_DOMAIN       ? "SET" : "MISSING",
+    ALL_ENV_KEYS:        Object.keys(process.env).filter(k => !k.includes("npm")).sort(),
+  });
+});
+
 // Incoming call
 app.post("/incoming-call", async (req, res) => {
   const callSid = req.body.CallSid;
