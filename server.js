@@ -155,7 +155,8 @@ function getThinkingId() {
   const key  = keys[Math.floor(Math.random() * keys.length)];
   return preCache.get(key);
 }
-const preCache = new Map(); // phrase → audioId
+const preCache  = new Map(); // phrase → audioId
+let cacheReady  = false;       // true once warmUpCache finishes
 
 async function warmUpCache() {
   console.log("Pre-generating common audio responses...");
@@ -168,6 +169,7 @@ async function warmUpCache() {
     // Small delay between ElevenLabs calls to avoid rate limiting
     await new Promise(r => setTimeout(r, 500));
   }
+  cacheReady = true;
   console.log("Audio cache ready!");
 }
 
@@ -334,7 +336,14 @@ async function sendSMS({ to, guest_name, date, time, party_size, confirmation_id
 // ══════════════════════════════════════════════════════════════════════════════
 
 app.get("/",       (_req, res) => res.json({ status: "ok", restaurant: RESTAURANT.name }));
-app.get("/health", (_req, res) => res.json({ status: "ok" }));
+app.get("/health", (_req, res) => {
+  // If cache crashed or never warmed up, restart it automatically
+  if (!cacheReady) {
+    console.log("Health check triggered cache warmup...");
+    warmUpCache().catch(err => console.error("Cache warmup error:", err.message));
+  }
+  res.json({ status: "ok", cacheReady, restaurant: RESTAURANT.name });
+});
 
 // ─── Diagnostic route — visit this in browser to see all env vars ─────────────
 app.get("/env-check", (_req, res) => {
@@ -356,7 +365,7 @@ app.post("/incoming-call", async (req, res) => {
   sessions.set(callSid, { history: [], callerPhone: req.body.From });
   const greetText = "Grazie for calling Marianna Ristorante in Renton! This is Sofia — how can I help you today?";
   // Use pre-cached greeting audio if available for instant playback
-  const cachedGreetId = preCache.get("greeting");
+  const cachedGreetId = cacheReady ? preCache.get("greeting") : null;
   if (cachedGreetId) {
     const domain  = process.env.RAILWAY_PUBLIC_DOMAIN || `localhost:${process.env.PORT || 8080}`;
     const baseUrl = domain.startsWith("http") ? domain : `https://${domain}`;
@@ -379,17 +388,16 @@ app.post("/process-speech", async (req, res) => {
   session.history.push({ role: "user", content: speech });
 
   // Play "thinking" filler immediately while Claude + ElevenLabs process
-  // This eliminates the perceived silence during processing
+  // Only use pre-cache if it is warmed up — otherwise skip to direct processing
   const domain  = process.env.RAILWAY_PUBLIC_DOMAIN || `localhost:${process.env.PORT || 8080}`;
   const baseUrl = domain.startsWith("http") ? domain : `https://${domain}`;
-  const thinkId = getThinkingId();
+  const thinkId = cacheReady ? getThinkingId() : null;
 
   if (thinkId) {
     const twiml = new VoiceResponse();
     twiml.play(`${baseUrl}/audio/${thinkId}`);
     twiml.redirect("/process-speech-async?callSid=" + callSid);
     res.type("text/xml").send(twiml.toString());
-    // Store speech for async processing
     session.pendingSpeech = speech;
     sessions.set(callSid, session);
     return;
