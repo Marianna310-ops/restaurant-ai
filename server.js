@@ -29,10 +29,13 @@ const getClaude = () => {
 
 // ─── Startup log ──────────────────────────────────────────────────────────────
 console.log("=== ENV CHECK ===");
-console.log("TWILIO_ACCOUNT_SID  :", process.env.TWILIO_ACCOUNT_SID   ? "SET" : "MISSING");
-console.log("TWILIO_AUTH_TOKEN   :", process.env.TWILIO_AUTH_TOKEN    ? "SET" : "MISSING");
-console.log("TWILIO_PHONE_NUMBER :", process.env.TWILIO_PHONE_NUMBER  ? "SET" : "MISSING");
-console.log("ANTHROPIC_API_KEY   :", process.env.ANTHROPIC_API_KEY    ? "SET" : "MISSING");
+console.log("TWILIO_ACCOUNT_SID  :", process.env.TWILIO_ACCOUNT_SID       ? "SET" : "MISSING");
+console.log("TWILIO_AUTH_TOKEN   :", process.env.TWILIO_AUTH_TOKEN        ? "SET" : "MISSING");
+console.log("TWILIO_PHONE_NUMBER :", process.env.TWILIO_PHONE_NUMBER      ? "SET" : "MISSING");
+console.log("ANTHROPIC_API_KEY   :", process.env.ANTHROPIC_API_KEY        ? "SET" : "MISSING");
+console.log("ELEVENLABS_KEY      :", process.env.ELEVENLABS_KEY           ? "SET" : "MISSING");
+console.log("ELEVENLABS_VOICE    :", process.env.ELEVENLABS_VOICE         ? "SET" : "MISSING");
+console.log("RAILWAY_DOMAIN      :", process.env.RAILWAY_DOMAIN           ? "SET" : "MISSING");
 console.log("PORT                :", process.env.PORT || "8080 (default)");
 console.log("=================");
 
@@ -45,25 +48,25 @@ const RESTAURANT = {
 };
 
 // ─── Claude system prompt ─────────────────────────────────────────────────────
-const SYSTEM_PROMPT = `You are Sofia, a warm and charming host at ${RESTAURANT.name}, an authentic Italian restaurant in Seattle.
+const SYSTEM_PROMPT = `You are Sofia, a warm and charming host at ${RESTAURANT.name}, an authentic Italian restaurant.
 Our hours are ${RESTAURANT.hours}. Today is ${new Date().toISOString().split("T")[0]}.
 
 Your personality:
-- Warm, genuine, and slightly Italian in flavor — use occasional words like "Perfetto!", "Benissimo!", "Certo!"
-- Speak naturally like a real person on the phone — use contractions, short sentences, natural rhythm
+- Warm, genuine, slightly Italian in flavor — use words like "Perfetto!", "Benissimo!", "Certo!" naturally
+- Speak like a real person on the phone — contractions, short sentences, natural rhythm
 - Never sound scripted or robotic
-- If someone asks something unexpected, handle it gracefully like a real host would
+- Handle unexpected questions gracefully like a real host would
 
-Your job: help callers make reservations or answer questions.
+Your job: help callers make reservations or answer questions about the restaurant.
 
-IMPORTANT — Your "say" field will be read aloud by ElevenLabs voice AI, so:
-- Write short, natural sentences. No bullet points or lists.
-- Use commas and ellipses to create natural pauses: "Let me see... yes, we have availability!"
-- Avoid special characters like *, #, /, &
-- Use words instead of numbers where natural: "seven PM" not "7 PM"
-- Keep each response under 3 sentences — callers don't want to listen to long speeches
+Your "say" field will be read aloud so:
+- Write short natural sentences — no bullet points or lists
+- Use commas and ellipses for natural pauses: "Let me see... yes, we have availability!"
+- No special characters like *, #, /, &
+- Use words for numbers: "seven PM" not "7 PM"
+- Max 2-3 sentences per response — keep it conversational
 
-Always reply ONLY with this JSON — no other text:
+Always reply ONLY with this exact JSON — no other text:
 {
   "intent": "reservation|hours|menu|other|transfer",
   "date": "YYYY-MM-DD or null",
@@ -74,12 +77,15 @@ Always reply ONLY with this JSON — no other text:
   "booking_ready": true or false
 }
 
-For a reservation collect all four: date, time, party_size, guest_name.
-Only set booking_ready to true when you have all four.
-Ask for one missing piece at a time — don't bombard the caller with multiple questions.`;
+Rules:
+- For a reservation collect: date, time, party_size, guest_name
+- Set booking_ready true only when all four are collected
+- Ask for ONE missing field at a time — never ask multiple questions at once
+- If caller is confused or upset, set intent to "transfer"`;
 
 // ─── In-memory sessions ───────────────────────────────────────────────────────
-const sessions = new Map();
+const sessions  = new Map();
+const audioCache = new Map();
 
 // ─── Ask Claude ───────────────────────────────────────────────────────────────
 async function askClaude(history) {
@@ -93,27 +99,27 @@ async function askClaude(history) {
   return JSON.parse(clean);
 }
 
-// ─── ElevenLabs TTS → returns public audio URL via Twilio ────────────────────
-// ElevenLabs generates the audio, we store it temporarily and serve via <Play>
+// ─── ElevenLabs TTS ───────────────────────────────────────────────────────────
 async function elevenLabsSpeak(text) {
-  const voiceId = process.env.ELEVENLABS_VOICE_ID;
-  const apiKey  = process.env.XI_API_KEY;
+  const apiKey  = process.env.ELEVENLABS_KEY;
+  const voiceId = process.env.ELEVENLABS_VOICE;
 
-  if (!voiceId || !apiKey) {
-    console.warn("ElevenLabs not configured — voiceId:", voiceId ? "SET" : "MISSING", "apiKey:", apiKey ? "SET" : "MISSING");
+  if (!apiKey || !voiceId) {
+    console.warn("ElevenLabs — KEY:", apiKey ? "SET" : "MISSING", "| VOICE:", voiceId ? "SET" : "MISSING");
     return null;
   }
 
   try {
+    console.log("Calling ElevenLabs with voice:", voiceId);
     const response = await axios.post(
       `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}/stream`,
       {
         text,
-        model_id: "eleven_turbo_v2", // lowest latency model — best for phone calls
+        model_id: "eleven_turbo_v2",
         voice_settings: {
-          stability:        0.45, // natural variation in tone
-          similarity_boost: 0.80, // stays true to chosen voice
-          style:            0.35, // warm, expressive delivery
+          stability:         0.45,
+          similarity_boost:  0.80,
+          style:             0.35,
           use_speaker_boost: true,
         },
       },
@@ -127,25 +133,23 @@ async function elevenLabsSpeak(text) {
       }
     );
 
-    // Store audio in memory and serve via a temporary route
     const audioBuffer = Buffer.from(response.data);
     const audioId     = Date.now() + "-" + Math.random().toString(36).slice(2, 7);
     audioCache.set(audioId, { buffer: audioBuffer, created: Date.now() });
 
-    // Clean up old audio files (older than 5 minutes)
+    // Clean up audio older than 5 minutes
     for (const [id, entry] of audioCache.entries()) {
       if (Date.now() - entry.created > 300000) audioCache.delete(id);
     }
 
+    console.log("ElevenLabs audio generated:", audioId);
     return audioId;
+
   } catch (err) {
-    console.error("ElevenLabs error:", err.response?.data || err.message);
+    console.error("ElevenLabs error:", err.response?.status, JSON.stringify(err.response?.data) || err.message);
     return null;
   }
 }
-
-// ─── In-memory audio cache ────────────────────────────────────────────────────
-const audioCache = new Map();
 
 // ─── Serve cached audio ───────────────────────────────────────────────────────
 app.get("/audio/:id", (req, res) => {
@@ -155,17 +159,16 @@ app.get("/audio/:id", (req, res) => {
   res.send(entry.buffer);
 });
 
-// ─── Build TwiML with ElevenLabs audio ───────────────────────────────────────
+// ─── Build TwiML ──────────────────────────────────────────────────────────────
 async function speak(text, { end = false, transfer = false } = {}) {
   const twiml   = new VoiceResponse();
   const audioId = await elevenLabsSpeak(text);
-  const baseUrl = process.env.RAILWAY_PUBLIC_DOMAIN
-    ? `https://${process.env.RAILWAY_PUBLIC_DOMAIN}`
-    : `http://localhost:${process.env.PORT || 8080}`;
+  const domain  = process.env.RAILWAY_DOMAIN || `localhost:${process.env.PORT || 8080}`;
+  const baseUrl = domain.startsWith("http") ? domain : `https://${domain}`;
 
-  // Helper: play ElevenLabs audio OR fall back to Google Neural voice
   const playOrSay = (target) => {
     if (audioId) {
+      console.log("Playing ElevenLabs audio:", `${baseUrl}/audio/${audioId}`);
       target.play(`${baseUrl}/audio/${audioId}`);
     } else {
       target.say({ voice: "Google.en-US-Neural2-F", language: "en-US" }, text);
@@ -203,11 +206,11 @@ async function checkYelpAvailability({ date, time, party_size }) {
     const res = await axios.get(
       `https://api.yelp.com/v3/businesses/${RESTAURANT.yelpAlias}/reservations/availability`,
       { headers: { Authorization: `Bearer ${process.env.YELP_API_KEY}` },
-        params: { date, time, covers: party_size } }
+        params:  { date, time, covers: party_size } }
     );
     return { available: res.data.available === true };
   } catch {
-    return { available: true };
+    return { available: true }; // graceful fallback
   }
 }
 
@@ -271,7 +274,7 @@ app.post("/process-speech", async (req, res) => {
       const { available } = await checkYelpAvailability(ai);
 
       if (!available) {
-        session.history.push({ role: "user", content: "That time is not available. Apologize warmly and ask for another time." });
+        session.history.push({ role: "user", content: "That time is unavailable. Apologize warmly and ask for another time." });
         const retry = await askClaude(session.history);
         session.history.push({ role: "assistant", content: JSON.stringify(retry) });
         sessions.set(callSid, session);
@@ -284,38 +287,38 @@ app.post("/process-speech", async (req, res) => {
         await sendSMS({ to: session.callerPhone, ...ai, confirmation_id: booking.confirmation_id });
         sessions.delete(callSid);
         return res.type("text/xml").send(await speak(
-          `${ai.say} Your confirmation number is ${booking.confirmation_id}. We've sent a text to your phone as well. We can't wait to see you — arrivederci!`,
+          `${ai.say} Your confirmation number is ${booking.confirmation_id}. We've also sent a text to your phone. We can't wait to see you — arrivederci!`,
           { end: true }
         ));
       }
 
       return res.type("text/xml").send(
-        await speak("Oh, I'm so sorry — I had a little trouble completing that booking. Let me get one of our team members to help you right away.", { transfer: true })
+        await speak("Oh, I'm so sorry — I had a little trouble with that booking. Let me get one of our team to help you right away.", { transfer: true })
       );
     }
 
     res.type("text/xml").send(await speak(ai.say));
 
   } catch (err) {
-    console.error("Error:", err.message);
+    console.error("Processing error:", err.message);
     res.type("text/xml").send(
-      await speak("Mi dispiace, I seem to be having a little trouble at the moment. Let me transfer you to our staff.", { transfer: true })
+      await speak("Mi dispiace, I'm having a little trouble right now. Let me transfer you to our staff.", { transfer: true })
     );
   }
 });
 
-// No input
+// No input fallback
 app.post("/no-input", async (_req, res) => {
-  const twiml = new VoiceResponse();
-  const audioId = await elevenLabsSpeak("I'm still here! Take your time — how can I help?");
-  const baseUrl = process.env.RAILWAY_PUBLIC_DOMAIN
-    ? `https://${process.env.RAILWAY_PUBLIC_DOMAIN}`
-    : `http://localhost:${process.env.PORT || 8080}`;
+  const twiml   = new VoiceResponse();
+  const text    = "I'm still here! Take your time — how can I help?";
+  const audioId = await elevenLabsSpeak(text);
+  const domain  = process.env.RAILWAY_DOMAIN || `localhost:${process.env.PORT || 8080}`;
+  const baseUrl = domain.startsWith("http") ? domain : `https://${domain}`;
   const g = twiml.gather({ input: "speech", action: "/process-speech", speechTimeout: "auto" });
   if (audioId) {
     g.play(`${baseUrl}/audio/${audioId}`);
   } else {
-    g.say({ voice: "Google.en-US-Neural2-F" }, "I'm still here! Take your time — how can I help?");
+    g.say({ voice: "Google.en-US-Neural2-F" }, text);
   }
   twiml.hangup();
   res.type("text/xml").send(twiml.toString());
@@ -324,7 +327,7 @@ app.post("/no-input", async (_req, res) => {
 // SMS
 app.post("/incoming-sms", (_req, res) => {
   const twiml = new twilio.twiml.MessagingResponse();
-  twiml.message(`Grazie for reaching out to ${RESTAURANT.name}! For reservations please give us a call. See you soon!`);
+  twiml.message(`Grazie for reaching out to ${RESTAURANT.name}! For reservations please give us a call. See you soon! 🍝`);
   res.type("text/xml").send(twiml.toString());
 });
 
