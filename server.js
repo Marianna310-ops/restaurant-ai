@@ -111,8 +111,11 @@ async function elevenLabsSpeak(text) {
 
   try {
     console.log("Calling ElevenLabs with voice:", voiceId);
+    // Log first 10 chars of key to verify it loaded correctly (safe to log partial)
+    console.log("Using API key starting with:", apiKey.substring(0, 10) + "...");
+
     const response = await axios.post(
-      `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}/stream`,
+      `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`,
       {
         text,
         model_id: "eleven_turbo_v2",
@@ -125,7 +128,7 @@ async function elevenLabsSpeak(text) {
       },
       {
         headers: {
-          "xi-api-key":   apiKey,
+          "xi-api-key":   apiKey.trim(),
           "Content-Type": "application/json",
           "Accept":       "audio/mpeg",
         },
@@ -146,7 +149,11 @@ async function elevenLabsSpeak(text) {
     return audioId;
 
   } catch (err) {
-    console.error("ElevenLabs error:", err.response?.status, JSON.stringify(err.response?.data) || err.message);
+    const errData = err.response?.data;
+    const errText = errData instanceof Buffer || errData?.type === "Buffer"
+      ? Buffer.from(errData.data || errData).toString("utf8")
+      : JSON.stringify(errData);
+    console.error("ElevenLabs error:", err.response?.status, errText);
     return null;
   }
 }
