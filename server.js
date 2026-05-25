@@ -75,7 +75,7 @@ PERSONA:
 - Always smiling and helpful tone
 - Pronounce Italian dishes naturally and correctly
 
-GREETING: "Grazie for calling Marianna Ristorante in Renton! This is Sofia — how can I help you today?"
+GREETING: "thank you for calling Marianna Ristorante in Renton! This is Sofia — how can I help you today?"
 CLOSING: "We look forward to seeing you soon. A presto!"
 
 RESERVATIONS:
@@ -109,7 +109,7 @@ const audioCache = new Map();
 async function askClaude(history) {
   const res = await getClaude().messages.create({
     model:      "claude-sonnet-4-5",
-    max_tokens: 150,
+    max_tokens: 100,
     system:     SYSTEM_PROMPT,
     messages:   history,
   });
@@ -133,15 +133,15 @@ async function elevenLabsSpeak(text) {
     console.log("Using API key starting with:", apiKey.substring(0, 10) + "...");
 
     const response = await axios.post(
-      `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`,
+      `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}/stream?optimize_streaming_latency=4`,
       {
         text,
-        model_id: "eleven_flash_v2_5",
+        model_id: "eleven_flash_v2",
         voice_settings: {
-          stability:         0.45,
-          similarity_boost:  0.80,
-          style:             0.35,
-          use_speaker_boost: true,
+          stability:         0.5,
+          similarity_boost:  0.75,
+          style:             0.0,
+          use_speaker_boost: false,
         },
       },
       {
@@ -215,7 +215,7 @@ async function speak(text, { end = false, transfer = false } = {}) {
   const g = twiml.gather({
     input:         "speech",
     action:        "/process-speech",
-    speechTimeout: "1",
+    speechTimeout: "0.5",
     language:      "en-US",
     enhanced:      "true",
   });
@@ -353,7 +353,7 @@ app.post("/no-input", async (_req, res) => {
   const audioId = await elevenLabsSpeak(text);
   const domain  = process.env.RAILWAY_PUBLIC_DOMAIN || `localhost:${process.env.PORT || 8080}`;
   const baseUrl = domain.startsWith("http") ? domain : `https://${domain}`;
-  const g = twiml.gather({ input: "speech", action: "/process-speech", speechTimeout: "1" });
+  const g = twiml.gather({ input: "speech", action: "/process-speech", speechTimeout: "0.5" });
   if (audioId) {
     g.play(`${baseUrl}/audio/${audioId}`);
   } else {
