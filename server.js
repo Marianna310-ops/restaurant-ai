@@ -142,9 +142,19 @@ const audioCache = new Map();
 // These play instantly with zero ElevenLabs latency during calls
 const PRE_CACHED = {
   greeting:   "Grazie for calling Marianna Ristorante in Renton! This is Sofia — how can I help you today?",
-  thinking:   "Mm, let me check on that for you.",
-  hold:       "One moment please.",
+  thinking0:  "Mm, let me check on that for you.",
+  thinking1:  "Sure, one moment.",
+  thinking2:  "Of course, just a second.",
+  thinking3:  "Certo, let me see.",
+  thinking4:  "Absolutely, give me just a moment.",
 };
+
+// Pick a random thinking phrase each time so it never sounds repetitive
+function getThinkingId() {
+  const keys = ["thinking0","thinking1","thinking2","thinking3","thinking4"];
+  const key  = keys[Math.floor(Math.random() * keys.length)];
+  return preCache.get(key);
+}
 const preCache = new Map(); // phrase → audioId
 
 async function warmUpCache() {
@@ -155,6 +165,8 @@ async function warmUpCache() {
       preCache.set(key, audioId);
       console.log(`Cached: ${key}`);
     }
+    // Small delay between ElevenLabs calls to avoid rate limiting
+    await new Promise(r => setTimeout(r, 500));
   }
   console.log("Audio cache ready!");
 }
@@ -370,7 +382,7 @@ app.post("/process-speech", async (req, res) => {
   // This eliminates the perceived silence during processing
   const domain  = process.env.RAILWAY_PUBLIC_DOMAIN || `localhost:${process.env.PORT || 8080}`;
   const baseUrl = domain.startsWith("http") ? domain : `https://${domain}`;
-  const thinkId = preCache.get("thinking");
+  const thinkId = getThinkingId();
 
   if (thinkId) {
     const twiml = new VoiceResponse();
