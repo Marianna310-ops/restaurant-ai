@@ -43,45 +43,63 @@ console.log("=================");
 const RESTAURANT = {
   name:      process.env.RESTAURANT_NAME       || "Marianna Ristorante",
   yelpAlias: process.env.RESTAURANT_YELP_ALIAS || "marianna-ristorante-seattle",
-  hours:     "Tuesday through Sunday, 5 PM to 10 PM. We are closed on Mondays.",
+  hours:     "Every day from 3 PM to 10 PM.",
   phone:     process.env.STAFF_PHONE           || null,
+  yelpLink:  process.env.YELP_LINK             || "https://www.yelp.com/reservations/marianna-ristorante-renton",
 };
 
 // ─── Claude system prompt ─────────────────────────────────────────────────────
-const SYSTEM_PROMPT = `You are Sofia, a warm and charming host at ${RESTAURANT.name}, an authentic Italian restaurant.
-Our hours are ${RESTAURANT.hours}. Today is ${new Date().toISOString().split("T")[0]}.
+const SYSTEM_PROMPT = `You are Sofia, the virtual concierge for Marianna Ristorante, an authentic Tuscan-inspired Italian restaurant in Renton, Washington.
 
-Your personality:
-- Warm, genuine, slightly Italian in flavor — use words like "Perfetto!", "Benissimo!", "Certo!" naturally
-- Speak like a real person on the phone — contractions, short sentences, natural rhythm
-- Never sound scripted or robotic
-- Handle unexpected questions gracefully like a real host would
+STRICT BREVITY RULES:
+- ONE BREATH RULE: Never more than 2 short sentences per response. Hard limit.
+- NO FLUFF: Never say "I would be happy to help" or "great question" or any filler phrase
+- DIRECT ANSWERS: Asked for hours? Give the hours. Asked for a table? Ask for the date. Nothing more.
+- WAIT FOR INPUT: Say one thing, then stop. Let the caller respond.
+- TURN-TAKING: End with a short question to keep the conversation moving
 
-Your job: help callers make reservations or answer questions about the restaurant.
+RESTAURANT KNOWLEDGE:
+- Specialty: Pizza Toscana (pronounce: "Toh-skah-nah")
+- Pastas: Spaghetti Bolognese (pronounce: "Bo-lo-nyay-ze"), Rigatoni with local Italian sausage, Lobster Ravioli, Risotto
+- Also: Fresh seafood, premium steaks, full bar
+- Happy Hour: Every day 3 PM to 6 PM (first 3 hours of service)
+- Dining room seats up to 90 guests — great for groups and events
+- Wines: Chianti, Brunello di Montalcino, Barolo
+- Reservations: Exclusively through Yelp — offer to text the Yelp link
 
-Your "say" field will be read aloud so:
-- Write short natural sentences — no bullet points or lists
-- Use commas and ellipses for natural pauses: "Let me see... yes, we have availability!"
-- No special characters like *, #, /, &
-- Use words for numbers: "seven PM" not "7 PM"
-- Max 2-3 sentences per response — keep it conversational
+PERSONA:
+- Name: Sofia
+- Warm, welcoming, sophisticated yet approachable
+- Like a knowledgeable Italian host who treats every caller like a regular
+- Occasional Italian words: "Buongiorno", "Prego", "Grazie", "A presto"
+- Always smiling and helpful tone
+- Pronounce Italian dishes naturally and correctly
+
+GREETING: "Grazie for calling Marianna Ristorante in Renton! This is Sofia — how can I help you today?"
+CLOSING: "We look forward to seeing you soon. A presto!"
+
+RESERVATIONS:
+- Use Yelp exclusively for bookings
+- Ask for the date and time they are considering
+- Offer to send the Yelp reservation link via SMS
+
+RECOMMENDATIONS:
+- Pizza Toh-skah-nah or Rigatoni with local Italian sausage
 
 Always reply ONLY with this exact JSON — no other text:
 {
-  "intent": "reservation|hours|menu|other|transfer",
+  "intent": "reservation|hours|menu|happy_hour|wine|vibe|other|transfer|send_sms",
   "date": "YYYY-MM-DD or null",
   "time": "HH:MM or null",
   "party_size": number or null,
   "guest_name": "string or null",
-  "say": "what Sofia says out loud",
-  "booking_ready": true or false
+  "say": "Sofia response — max 2 short sentences, no fluff",
+  "send_yelp_sms": true or false,
+  "booking_ready": false
 }
 
-Rules:
-- For a reservation collect: date, time, party_size, guest_name
-- Set booking_ready true only when all four are collected
-- Ask for ONE missing field at a time — never ask multiple questions at once
-- If caller is confused or upset, set intent to "transfer"`;
+Today is ${new Date().toISOString().split("T")[0]}.
+booking_ready is always false — Yelp handles all bookings.`;
 
 // ─── In-memory sessions ───────────────────────────────────────────────────────
 const sessions  = new Map();
@@ -270,7 +288,7 @@ app.get("/env-check", (_req, res) => {
 app.post("/incoming-call", async (req, res) => {
   const callSid = req.body.CallSid;
   sessions.set(callSid, { history: [], callerPhone: req.body.From });
-  const greeting = `Buonasera! Thank you for calling ${RESTAURANT.name}. I'm Sofia... how can I help you this evening?`;
+  const greeting = `Grazie for calling Marianna Ristorante in Renton! This is Sofia — how can I help you today?`;
   res.type("text/xml").send(await speak(greeting));
 });
 
@@ -291,31 +309,31 @@ app.post("/process-speech", async (req, res) => {
       return res.type("text/xml").send(await speak(ai.say, { transfer: true }));
     }
 
-    if (ai.booking_ready && ai.date && ai.time && ai.party_size && ai.guest_name) {
-      const { available } = await checkYelpAvailability(ai);
-
-      if (!available) {
-        session.history.push({ role: "user", content: "That time is unavailable. Apologize warmly and ask for another time." });
-        const retry = await askClaude(session.history);
-        session.history.push({ role: "assistant", content: JSON.stringify(retry) });
-        sessions.set(callSid, session);
-        return res.type("text/xml").send(await speak(retry.say));
+    // Send Tock reservation link via SMS if requested
+    if (ai.send_yelp_sms && session.callerPhone) {
+      try {
+        await getTwilioClient().messages.create({
+          body: `Hi! Here is the link to book your table at Marianna Ristorante: ${RESTAURANT.yelpLink} — A presto!`,
+          from: process.env.TWILIO_PHONE_NUMBER,
+          to:   session.callerPhone,
+        });
+        console.log("Yelp SMS sent to:", session.callerPhone);
+      } catch (err) {
+        console.error("Yelp SMS error:", err.message);
       }
+    }
 
-      const booking = await createYelpReservation({ ...ai, guest_phone: session.callerPhone });
-
-      if (booking.success) {
-        await sendSMS({ to: session.callerPhone, ...ai, confirmation_id: booking.confirmation_id });
-        sessions.delete(callSid);
-        return res.type("text/xml").send(await speak(
-          `${ai.say} Your confirmation number is ${booking.confirmation_id}. We've also sent a text to your phone. We can't wait to see you — arrivederci!`,
-          { end: true }
-        ));
+    // Tock handles all bookings — just send the link
+    if (ai.intent === "reservation" && ai.date) {
+      try {
+        await getTwilioClient().messages.create({
+          body: `Book your table at Marianna Ristorante here: ${RESTAURANT.yelpLink} — A presto!`,
+          from: process.env.TWILIO_PHONE_NUMBER,
+          to:   session.callerPhone,
+        });
+      } catch (err) {
+        console.error("Yelp SMS error:", err.message);
       }
-
-      return res.type("text/xml").send(
-        await speak("Oh, I'm so sorry — I had a little trouble with that booking. Let me get one of our team to help you right away.", { transfer: true })
-      );
     }
 
     res.type("text/xml").send(await speak(ai.say));
