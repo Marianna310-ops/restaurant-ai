@@ -91,7 +91,7 @@ const audioCache = new Map();
 async function askClaude(history) {
   const res = await getClaude().messages.create({
     model:      "claude-sonnet-4-5",
-    max_tokens: 300,
+    max_tokens: 150,
     system:     SYSTEM_PROMPT,
     messages:   history,
   });
@@ -118,7 +118,7 @@ async function elevenLabsSpeak(text) {
       `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`,
       {
         text,
-        model_id: "eleven_turbo_v2",
+        model_id: "eleven_flash_v2_5",
         voice_settings: {
           stability:         0.45,
           similarity_boost:  0.80,
@@ -197,7 +197,7 @@ async function speak(text, { end = false, transfer = false } = {}) {
   const g = twiml.gather({
     input:         "speech",
     action:        "/process-speech",
-    speechTimeout: "auto",
+    speechTimeout: "1",
     language:      "en-US",
     enhanced:      "true",
   });
@@ -335,7 +335,7 @@ app.post("/no-input", async (_req, res) => {
   const audioId = await elevenLabsSpeak(text);
   const domain  = process.env.RAILWAY_PUBLIC_DOMAIN || `localhost:${process.env.PORT || 8080}`;
   const baseUrl = domain.startsWith("http") ? domain : `https://${domain}`;
-  const g = twiml.gather({ input: "speech", action: "/process-speech", speechTimeout: "auto" });
+  const g = twiml.gather({ input: "speech", action: "/process-speech", speechTimeout: "1" });
   if (audioId) {
     g.play(`${baseUrl}/audio/${audioId}`);
   } else {
