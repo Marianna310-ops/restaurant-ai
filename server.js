@@ -297,8 +297,8 @@ app.get("/audio/:id", (req, res) => {
 async function speak(text, { end = false, transfer = false } = {}) {
   const twiml   = new VoiceResponse();
   const audioId = await elevenLabsSpeak(text);
-  const domain  = process.env.RAILWAY_PUBLIC_DOMAIN || `localhost:${process.env.PORT || 8080}`;
-  const baseUrl = domain.startsWith("http") ? domain : `https://${domain}`;
+  console.log("BaseURL for audio:", `https://${process.env.RAILWAY_PUBLIC_DOMAIN}`);
+  const baseUrl = `https://${process.env.RAILWAY_PUBLIC_DOMAIN}`;
 
   const playOrSay = (target) => {
     if (audioId) {
@@ -406,8 +406,7 @@ app.post("/incoming-call", (req, res) => {
     const callSid   = req.body.CallSid;
     sessions.set(callSid, { history: [], callerPhone: req.body.From });
     const greetText = "Grazie for calling Marianna Ristorante in Renton! This is Sofia — how can I help you today?";
-    const domain    = process.env.RAILWAY_PUBLIC_DOMAIN || `localhost:${process.env.PORT || 8080}`;
-    const baseUrl   = domain.startsWith("http") ? domain : `https://${domain}`;
+    const baseUrl   = `https://${process.env.RAILWAY_PUBLIC_DOMAIN}`;
     const twiml     = new VoiceResponse();
     const g = twiml.gather({
       input: "speech", action: "/process-speech",
@@ -444,8 +443,7 @@ app.post("/process-speech", async (req, res) => {
 
   // Play "thinking" filler immediately while Claude + ElevenLabs process
   // Only use pre-cache if it is warmed up — otherwise skip to direct processing
-  const domain  = process.env.RAILWAY_PUBLIC_DOMAIN || `localhost:${process.env.PORT || 8080}`;
-  const baseUrl = domain.startsWith("http") ? domain : `https://${domain}`;
+  const baseUrl = `https://${process.env.RAILWAY_PUBLIC_DOMAIN}`;
   const thinkId = cacheReady ? getThinkingId() : null;
 
   if (thinkId) {
@@ -543,8 +541,7 @@ app.post("/no-input", async (_req, res) => {
   const twiml   = new VoiceResponse();
   const text    = "I'm still here! Take your time — how can I help?";
   const audioId = await elevenLabsSpeak(text);
-  const domain  = process.env.RAILWAY_PUBLIC_DOMAIN || `localhost:${process.env.PORT || 8080}`;
-  const baseUrl = domain.startsWith("http") ? domain : `https://${domain}`;
+  const baseUrl = `https://${process.env.RAILWAY_PUBLIC_DOMAIN}`;
   const g = twiml.gather({ input: "speech", action: "/process-speech", speechTimeout: "5" });
   if (audioId) {
     g.play(`${baseUrl}/audio/${audioId}`);
