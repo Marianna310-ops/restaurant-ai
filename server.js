@@ -218,12 +218,16 @@ async function warmUpCache() {
 async function askClaude(history) {
   const res = await getClaude().messages.create({
     model:      "claude-sonnet-4-5",
-    max_tokens: 100,
+    max_tokens: 250,
     system:     SYSTEM_PROMPT,
     messages:   history,
   });
-  const clean = res.content[0].text.trim().replace(/```json|```/g, "").trim();
-  return JSON.parse(clean);
+  const raw   = res.content[0].text.trim();
+  const clean = raw.replace(/```json|```/g, "").trim();
+  // Extract JSON object even if there is trailing text
+  const match = clean.match(/\{[\s\S]*\}/);
+  if (!match) throw new Error("No JSON found in Claude response: " + clean);
+  return JSON.parse(match[0]);
 }
 
 // ─── ElevenLabs TTS ───────────────────────────────────────────────────────────
