@@ -292,9 +292,48 @@ async function elevenLabsSpeak(text) {
 // ─── Serve cached audio ───────────────────────────────────────────────────────
 app.get("/audio/:id", (req, res) => {
   const entry = audioCache.get(req.params.id);
-  if (!entry) return res.status(404).send("Not found");
-  res.set("Content-Type", "audio/mpeg");
+  if (!entry) {
+    console.error("Audio not found in cache:", req.params.id);
+    return res.status(404).send("Not found");
+  }
+  // Headers optimized for Twilio audio playback
+  res.set({
+    "Content-Type":   "audio/mpeg",
+    "Content-Length": entry.buffer.length,
+    "Cache-Control":  "no-cache",
+    "Accept-Ranges":  "bytes",
+  });
+  console.log("Serving audio to Twilio:", req.params.id, entry.buffer.length, "bytes");
   res.send(entry.buffer);
+});
+
+// Twilio audio proxy — streams ElevenLabs directly to Twilio in real time
+app.get("/stream/:voiceId", async (req, res) => {
+  const text    = Buffer.from(req.query.text || "", "base64").toString("utf8");
+  const voiceId = req.params.voiceId;
+  const apiKey  = process.env.ELEVEN_LABS_API_KEY;
+
+  if (!text || !apiKey) return res.status(400).send("Missing params");
+
+  try {
+    const response = await axios.post(
+      `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}/stream?optimize_streaming_latency=4`,
+      {
+        text,
+        model_id: "eleven_flash_v2",
+        voice_settings: { stability: 0.5, similarity_boost: 0.75, style: 0.0, use_speaker_boost: false },
+      },
+      {
+        headers: { "xi-api-key": apiKey.trim(), "Content-Type": "application/json", "Accept": "audio/mpeg" },
+        responseType: "stream",
+      }
+    );
+    res.set("Content-Type", "audio/mpeg");
+    response.data.pipe(res);
+  } catch (err) {
+    console.error("Stream error:", err.message);
+    res.status(500).send("Stream failed");
+  }
 });
 
 // ─── Build TwiML ──────────────────────────────────────────────────────────────
@@ -304,10 +343,16 @@ async function speak(text, { end = false, transfer = false } = {}) {
   console.log("BaseURL for audio:", `https://${process.env.RAILWAY_PUBLIC_DOMAIN}`);
   const baseUrl = `https://${process.env.RAILWAY_PUBLIC_DOMAIN}`;
 
+  const voiceId = process.env.ELEVENLABS_VOICE_ID;
+  const apiKey  = process.env.ELEVEN_LABS_API_KEY;
+  const encoded = Buffer.from(text).toString("base64");
+
   const playOrSay = (target) => {
-    if (audioId) {
-      console.log("Playing ElevenLabs audio:", `${baseUrl}/audio/${audioId}`);
-      target.play(`${baseUrl}/audio/${audioId}`);
+    if (voiceId && apiKey) {
+      // Stream directly — no cache needed, Twilio fetches from our /stream endpoint
+      const streamUrl = `${baseUrl}/stream/${voiceId}?text=${encoded}`;
+      console.log("Streaming ElevenLabs audio to Twilio");
+      target.play(streamUrl);
     } else {
       target.say({ voice: "Google.en-US-Neural2-F", language: "en-US" }, text);
     }
@@ -448,11 +493,23 @@ app.post("/process-speech", async (req, res) => {
   // Play "thinking" filler immediately while Claude + ElevenLabs process
   // Only use pre-cache if it is warmed up — otherwise skip to direct processing
   const baseUrl = `https://${process.env.RAILWAY_PUBLIC_DOMAIN}`;
-  const thinkId = cacheReady ? getThinkingId() : null;
+  // Stream thinking sound while processing
+  const voiceId  = process.env.ELEVENLABS_VOICE_ID;
+  const apiKey   = process.env.ELEVEN_LABS_API_KEY;
+  const thoughts = [
+    "Mm, let me check on that for you.",
+    "Sure, one moment.",
+    "Of course, just a second.",
+    "Certo, let me see.",
+    "Absolutely, give me just a moment.",
+  ];
+  const thinkText   = thoughts[Math.floor(Math.random() * thoughts.length)];
+  const thinkBaseUrl = `https://${process.env.RAILWAY_PUBLIC_DOMAIN}`;
 
-  if (thinkId) {
-    const twiml = new VoiceResponse();
-    twiml.play(`${baseUrl}/audio/${thinkId}`);
+  if (voiceId && apiKey) {
+    const encoded = Buffer.from(thinkText).toString("base64");
+    const twiml   = new VoiceResponse();
+    twiml.play(`${thinkBaseUrl}/stream/${voiceId}?text=${encoded}`);
     twiml.redirect("/process-speech-async?callSid=" + callSid);
     res.type("text/xml").send(twiml.toString());
     session.pendingSpeech = speech;
@@ -542,13 +599,19 @@ app.post("/process-speech-async", async (req, res) => {
 
 // No input fallback
 app.post("/no-input", async (_req, res) => {
-  const twiml   = new VoiceResponse();
-  const text    = "I'm still here! Take your time — how can I help?";
-  const audioId = await elevenLabsSpeak(text);
+  const twiml    = new VoiceResponse();
+  const text     = "I'm still here! Take your time — how can I help?";
+  const voiceId  = process.env.ELEVENLABS_VOICE_ID;
+  const apiKeySt = process.env.ELEVEN_LABS_API_KEY;
   const baseUrl = `https://${process.env.RAILWAY_PUBLIC_DOMAIN}`;
   const g = twiml.gather({ input: "speech", action: "/process-speech", speechTimeout: "3" });
   if (audioId) {
-    g.play(`${baseUrl}/audio/${audioId}`);
+    if (voiceId && apiKeySt) {
+      const enc = Buffer.from(text).toString("base64");
+      g.play(`${baseUrl}/stream/${voiceId}?text=${enc}`);
+    } else {
+      g.say({ voice: "Google.en-US-Neural2-F" }, text);
+    }
   } else {
     g.say({ voice: "Google.en-US-Neural2-F" }, text);
   }
@@ -579,5 +642,5 @@ const PORT = process.env.PORT || 8080;
 app.listen(PORT, "0.0.0.0", async () => {
   console.log(`Server running on port ${PORT}`);
   // Pre-generate common audio after a short delay to let server fully start
-  setTimeout(warmUpCache, 3000);
+  console.log("Using direct ElevenLabs streaming — no cache warmup needed.");
 });
