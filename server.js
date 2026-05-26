@@ -318,7 +318,7 @@ app.get("/ambiance", async (req, res) => {
       "https://api.elevenlabs.io/v1/sound-generation",
       {
         text: "Quiet upscale Italian restaurant ambiance, soft background chatter, gentle clinking glasses, warm atmosphere",
-        duration_seconds: 8,
+        duration_seconds: 3,
         prompt_influence: 0.3,
       },
       {
@@ -547,8 +547,9 @@ app.post("/process-speech", async (req, res) => {
 
     // Then play restaurant ambiance while Claude + ElevenLabs process the response
     // Using a short royalty-free restaurant ambiance clip on loop
-    twiml.play({ loop: 3 }, `${thinkBaseUrl}/ambiance`);
+    twiml.play({ loop: 1 }, `${thinkBaseUrl}/ambiance`);
 
+    twiml.pause({ length: 1 });
     twiml.redirect("/process-speech-async?callSid=" + callSid);
     res.type("text/xml").send(twiml.toString());
     session.pendingSpeech = speech;
