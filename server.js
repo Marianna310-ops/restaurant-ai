@@ -328,7 +328,7 @@ async function speak(text, { end = false, transfer = false } = {}) {
   const g = twiml.gather({
     input:         "speech",
     action:        "/process-speech",
-    speechTimeout: "5",
+    speechTimeout: "3",
     language:      "en-US",
     enhanced:      "true",
   });
@@ -414,7 +414,7 @@ app.post("/incoming-call", (req, res) => {
     const twiml     = new VoiceResponse();
     const g = twiml.gather({
       input: "speech", action: "/process-speech",
-      speechTimeout: "5", language: "en-US", enhanced: "true"
+      speechTimeout: "3", language: "en-US", enhanced: "true"
     });
 
     // Use pre-cached ElevenLabs audio if ready — otherwise instant Google fallback
@@ -546,7 +546,7 @@ app.post("/no-input", async (_req, res) => {
   const text    = "I'm still here! Take your time — how can I help?";
   const audioId = await elevenLabsSpeak(text);
   const baseUrl = `https://${process.env.RAILWAY_PUBLIC_DOMAIN}`;
-  const g = twiml.gather({ input: "speech", action: "/process-speech", speechTimeout: "5" });
+  const g = twiml.gather({ input: "speech", action: "/process-speech", speechTimeout: "3" });
   if (audioId) {
     g.play(`${baseUrl}/audio/${audioId}`);
   } else {
