@@ -307,6 +307,38 @@ app.get("/audio/:id", (req, res) => {
   res.send(entry.buffer);
 });
 
+// Restaurant ambiance — proxies royalty-free background noise
+app.get("/ambiance", async (req, res) => {
+  const apiKey = process.env.ELEVEN_LABS_API_KEY;
+  if (!apiKey) return res.status(400).send("No API key");
+
+  try {
+    // Generate restaurant ambiance using ElevenLabs Sound Effects API
+    const response = await axios.post(
+      "https://api.elevenlabs.io/v1/sound-generation",
+      {
+        text: "Quiet upscale Italian restaurant ambiance, soft background chatter, gentle clinking glasses, warm atmosphere",
+        duration_seconds: 8,
+        prompt_influence: 0.3,
+      },
+      {
+        headers: {
+          "xi-api-key":   apiKey.trim(),
+          "Content-Type": "application/json",
+          "Accept":       "audio/mpeg",
+        },
+        responseType: "stream",
+      }
+    );
+    res.set("Content-Type", "audio/mpeg");
+    response.data.pipe(res);
+  } catch (err) {
+    console.error("Ambiance error:", err.response?.status, err.message);
+    // Fallback — silence (empty response so Twilio doesn't error)
+    res.status(204).send();
+  }
+});
+
 // Twilio audio proxy — streams ElevenLabs directly to Twilio in real time
 app.get("/stream/:voiceId", async (req, res) => {
   const text    = Buffer.from(req.query.text || "", "base64").toString("utf8");
@@ -493,7 +525,7 @@ app.post("/process-speech", async (req, res) => {
   // Play "thinking" filler immediately while Claude + ElevenLabs process
   // Only use pre-cache if it is warmed up — otherwise skip to direct processing
   const baseUrl = `https://${process.env.RAILWAY_PUBLIC_DOMAIN}`;
-  // Stream thinking sound while processing
+  // Stream thinking sound + restaurant ambiance while processing
   const voiceId  = process.env.ELEVENLABS_VOICE_ID;
   const apiKey   = process.env.ELEVEN_LABS_API_KEY;
   const thoughts = [
@@ -503,13 +535,20 @@ app.post("/process-speech", async (req, res) => {
     "Certo, let me see.",
     "Absolutely, give me just a moment.",
   ];
-  const thinkText   = thoughts[Math.floor(Math.random() * thoughts.length)];
+  const thinkText    = thoughts[Math.floor(Math.random() * thoughts.length)];
   const thinkBaseUrl = `https://${process.env.RAILWAY_PUBLIC_DOMAIN}`;
 
   if (voiceId && apiKey) {
-    const encoded = Buffer.from(thinkText).toString("base64");
-    const twiml   = new VoiceResponse();
+    const encoded  = Buffer.from(thinkText).toString("base64");
+    const twiml    = new VoiceResponse();
+
+    // Play thinking phrase first
     twiml.play(`${thinkBaseUrl}/stream/${voiceId}?text=${encoded}`);
+
+    // Then play restaurant ambiance while Claude + ElevenLabs process the response
+    // Using a short royalty-free restaurant ambiance clip on loop
+    twiml.play({ loop: 3 }, `${thinkBaseUrl}/ambiance`);
+
     twiml.redirect("/process-speech-async?callSid=" + callSid);
     res.type("text/xml").send(twiml.toString());
     session.pendingSpeech = speech;
