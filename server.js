@@ -360,23 +360,37 @@ app.get("/env-check", (_req, res) => {
 });
 
 // Incoming call
-app.post("/incoming-call", async (req, res) => {
-  const callSid = req.body.CallSid;
-  sessions.set(callSid, { history: [], callerPhone: req.body.From });
-  const greetText = "Grazie for calling Marianna Ristorante in Renton! This is Sofia — how can I help you today?";
-  // Use pre-cached greeting audio if available for instant playback
-  const cachedGreetId = cacheReady ? preCache.get("greeting") : null;
-  if (cachedGreetId) {
-    const domain  = process.env.RAILWAY_PUBLIC_DOMAIN || `localhost:${process.env.PORT || 8080}`;
-    const baseUrl = domain.startsWith("http") ? domain : `https://${domain}`;
-    const twiml   = new VoiceResponse();
-    const g = twiml.gather({ input: "speech", action: "/process-speech", speechTimeout: "0.5", language: "en-US", enhanced: "true" });
-    g.play(`${baseUrl}/audio/${cachedGreetId}`);
+app.post("/incoming-call", (req, res) => {
+  try {
+    const callSid   = req.body.CallSid;
+    sessions.set(callSid, { history: [], callerPhone: req.body.From });
+    const greetText = "Grazie for calling Marianna Ristorante in Renton! This is Sofia — how can I help you today?";
+    const domain    = process.env.RAILWAY_PUBLIC_DOMAIN || `localhost:${process.env.PORT || 8080}`;
+    const baseUrl   = domain.startsWith("http") ? domain : `https://${domain}`;
+    const twiml     = new VoiceResponse();
+    const g = twiml.gather({
+      input: "speech", action: "/process-speech",
+      speechTimeout: "0.5", language: "en-US", enhanced: "true"
+    });
+
+    // Use pre-cached ElevenLabs audio if ready — otherwise instant Google fallback
+    const cachedGreetId = cacheReady ? preCache.get("greeting") : null;
+    if (cachedGreetId) {
+      g.play(`${baseUrl}/audio/${cachedGreetId}`);
+    } else {
+      // Google Neural voice — responds in milliseconds, no ElevenLabs needed
+      g.say({ voice: "Google.en-US-Neural2-F", language: "en-US" }, greetText);
+    }
+
     twiml.redirect("/no-input");
-    return res.type("text/xml").send(twiml.toString());
+    res.type("text/xml").send(twiml.toString());
+  } catch (err) {
+    console.error("Incoming call error:", err.message);
+    const twiml = new VoiceResponse();
+    twiml.say({ voice: "Google.en-US-Neural2-F" }, "Thank you for calling Marianna Ristorante. Please hold.");
+    twiml.redirect("/no-input");
+    res.type("text/xml").send(twiml.toString());
   }
-  const greeting = greetText;
-  res.type("text/xml").send(await speak(greeting));
 });
 
 // Process speech
